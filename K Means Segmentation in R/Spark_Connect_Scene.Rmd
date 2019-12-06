@@ -1,0 +1,60 @@
+---
+title: "Joins"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+T### Load Libraries
+```{r}
+library(tidyverse)
+# Load sparklyr
+library(sparklyr)
+```
+
+### Set Spark Connection
+```{r}
+config <- spark_config()
+config$spark.executor.memory <- "500MB" 
+config$spark.driver.memory <- "100MB"
+config$spark.port.maxRetries <- 128
+spark_conn <- spark_connect(master = "yarn-client", config = config)
+spark_version(spark_conn)
+```
+
+### Set File paths
+```{r}
+in_path = '/global/project/queens-mma/scene2018/full/'
+out_path = '/global/project/queens-mma/scene2018/full/'
+```
+
+### Load Tables
+```{r}
+# Copy track_metadata to Spark
+SP_Points <- spark_read_csv(spark_conn, 'SP_Points', 'file:///global/project/queens-mma/scene2018/sample03/SceneAnalytics.dbo.SP_Points.csv', header = TRUE)
+```
+
+### Get only Black Card Data
+```{r}
+SP_Points %>%
+  # Select columns
+  select(Unique_member_identifier,pointid,points,pointtypeid,ex_sourceid,TransAmount) %>%
+  # Filter rows
+  filter(pointtypeid %in% c(11,12,1252,1253,1254,1282,1283,1290,1322)) %>%
+  # Arrange rows
+  arrange(desc(points))
+```
+
+```{r}
+blackcard_points %>%
+  # Group by location
+  group_by(ex_sourceid) %>%
+  #Calculate Sum by location
+  summarize(total_points = sum(points))
+```

@@ -1,0 +1,210 @@
+---
+title: "KMeans"
+author: "Shafquat Arefeen"
+date: "July 20, 2018"
+output: html_document
+---
+## Loading the Data
+
+The first step is to load the joined data and profile the data
+
+```{r}
+# load by browsing
+seg.raw <- read.csv(file.choose())
+
+# check column names 
+names(seg.raw)
+
+# Assign the last date of the data for age calculations
+data_last_date <- as.Date("2017-12-31")
+```
+
+## Field Manipulation
+
+Create new quantitative fields to run K-Means.
+These fields are Male, Age, Account Age, and Last Activity
+Dormant customers are removed as required. If the Last Activity is <= 1 then the customer is considered to be active as per the requirements.
+
+```{r cars}
+# Male Dummy
+seg.raw$Male[seg.raw$gender=='Female'] <- 0
+seg.raw$Male[seg.raw$gender=='Male'] <- 1
+
+# Remove all non int entries in Male field
+seg.clean <- seg.raw[!is.na(seg.raw$Male),]
+
+# Add age field from birthdate
+library('eeptools')
+seg.clean$age <- floor(age_calc(as.Date(seg.clean$Birthdate), enddate = data_last_date, units = "years"))
+
+# Remove Dormant members
+seg.clean <- seg.clean[seg.clean$ActivityStatusScotiaScene != 2,]
+
+# Add new field based on BlackEarnLastDt if year > 1 then inactive
+seg.clean$last_activity <- age_calc(as.Date(seg.clean$BlackEarnLastDt), enddate = data_last_date, units = "years")
+
+# Add account age field
+seg.clean$account_age <- floor(age_calc(as.Date(as.character(seg.clean$AccountOpenKey), "%Y%m%d"), enddate = data_last_date, units = "months"))
+
+```
+
+## Active members only
+
+Keep only the active members in the dataframe by using the last_activity field
+
+```{r}
+# Keep Active members
+seg.active <- seg.clean[seg.clean$last_activity <= 1,]
+```
+
+
+## Create a function to Aggregate the fields by average
+
+A simple function to report means by group
+
+```{r}
+seg.summ <- function(data, groups) {
+  aggregate(data, list(groups), function(x) mean(as.numeric(x)))  
+}
+```
+
+
+## Subset the fields for K-Means
+
+Only select the quantitative fields for K-Means.
+
+```{r}
+# convert factor variables to numeric (kmeans requires). OK b/c all are binary.
+seg.df.num <- seg.active[c(
+                       'account_age',
+                       'age',
+                       'OnlineTicketPurchaser_value',
+                       'TuesdayAttendee_value',
+                       'ConcessionPurchaser_value',
+                       'AttendsWithChild_value',
+                       'WeekendMatineeViewer_value',
+                       'WeekdayMatineeViewer_value',
+                       'BlackEarnCount',
+                       'BlackEarnPointTotal',
+                       'BlackBurnCount',
+                       'BlackBurnPointTotal',
+                       'BlackActivityDays',
+                       'VISACineplex',
+                       'VISA',
+                       'CineplexIssue',
+                       'CineplexRedeem',
+                       'PointsScene',
+                       'CARAIssue',
+                       'CARARedeem',
+                       'Male',
+                       'last_activity'
+                       )]
+summary(seg.df.num)
+```
+
+## Determine number of clusters
+
+Scale the numbers so no fields are overweighted.
+The goal is to minimize the within cluster variance. And plot in an elbow graph to decide how many clusters to choose.
+
+```{r}
+# Scale values
+scaled_df <- scale(seg.df.num)
+
+wss <- (nrow(scaled_df)-1)*sum(apply(scaled_df,2,var))
+for (i in 2:15) wss[i] <- sum(kmeans(scaled_df, 
+                                     centers=i)$withinss)
+
+# The elbow graph to gauge the number of clusters
+plot(1:15, wss, type="b", xlab="Number of Clusters",
+     ylab="Within groups sum of squares")
+```
+
+
+## K-Means
+
+Run K-Means and inspect the result.
+
+```{r}
+set.seed(96743) # set seed to make sure the random assignment starts at the same point
+seg.k5 <- kmeans(scaled_df, centers=5)
+
+# inspect the 4-segment solution by looking at the means per segment per numeric
+seg.summ(seg.df.num, seg.k5$cluster)
+```
+
+## Output results
+Create a csv for the results that can be used to get summary statistics.
+
+```{r}
+# assign Cluster to DataFrame
+seg.df.num$cluster <- seg.k5$cluster
+
+# assign user_id back to to DataFrame
+seg.df.num$Unique_member_identifier <- seg.active$Unique_member_identifier
+seg.df.num$age_class <- seg.active$age_class
+
+# write dataframe to csv for summary statistics
+write.csv(seg.df.num, file = "K_means_data.csv")
+```
+
+
+
+## Cluster Visualization
+Run K-Means and inspect the result.
+
+```{r}
+library("flexclust")
+
+set.seed(1)
+dat <- seg.df.num
+ind <- sample(nrow(dat), 1000)
+
+dat[["train"]] <- TRUE
+dat[["train"]][ind] <- FALSE
+
+cl1 = kcca(dat[dat[["train"]]==TRUE, 1:2], k=5, kccaFamily("kmeans"))
+cl1    
+
+pred_train <- predict(cl1)
+pred_test <- predict(cl1, newdata=dat[dat[["train"]]==FALSE, 1:2])
+
+image(cl1)
+points(dat[dat[["train"]]==TRUE, 1:2], col=pred_train, pch=19, cex=0.3)
+points(dat[dat[["train"]]==FALSE, 1:2], col=pred_test, pch=22, bg="orange")
+```
+
+## Summary Segments
+Get the Size of each cluster, gender by cluster, age_class by cluster, tenure enrollment source by cluster, activity at CPX in last year, activity at other partners in last year
+
+```{r}
+# Choose the exported dataset K_means_data.csv
+sum.segments <- read.csv(file.choose())
+```
+
+Size of each cluster
+```{r}
+aggregate(sum.segments$Unique_member_identifier, by=list(sum.segments$cluster), FUN=length)
+```
+Gender by cluster
+```{r}
+aggregate(sum.segments$Male, by=list(sum.segments$cluster), FUN=sum)
+```
+Age_Class by cluster
+```{r}
+aggregate(sum.segments$Unique_member_identifier, by=list(sum.segments$cluster,sum.segments$age_class), FUN=length)
+```
+tenure enrollment source by cluster
+```{r}
+aggregate(sum.segments$Unique_member_identifier, by=list(sum.segments$cluster,sum.segments$account_age), FUN=length)
+```
+activity at CPX in last year
+```{r}
+round(aggregate(sum.segments$CineplexIssue, by=list(sum.segments$cluster), FUN=mean))
+round(aggregate(sum.segments$CineplexRedeem, by=list(sum.segments$cluster), FUN=mean))
+```
+activity at other partners in last year
+```{r}
+round(aggregate(sum.segments$CARAIssue, by=list(sum.segments$cluster), FUN=mean))
+round(aggregate(sum.segments$CARARedeem, by=list(sum.segments$cluster), FUN=mean))
+```
